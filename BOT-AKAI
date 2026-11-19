@@ -1,0 +1,432 @@
+import discord
+from discord import app_commands
+from discord.ext import commands
+import random
+
+# ================= ================= =================
+# 1. إعداد البوت
+# ================= ================= =================
+intents = discord.Intents.default()
+intents.members = True
+intents.message_content = True
+
+bot = commands.Bot(command_prefix="!", intents=intents)
+
+# ================= ================= =================
+# 2. زر الرتبة المخصص المستمر (يحفظ التفاعل بعد إعادة التشغيل)
+# ================= ================= =================
+class DynamicRoleButton(discord.ui.Button):
+    def __init__(self, role_id: int):
+        super().__init__(
+            label="الحصول على الرتبة / إزالتها", 
+            style=discord.ButtonStyle.success, 
+            emoji="🏷️",
+            custom_id=f"dynamic_role_btn_{role_id}" # Custom ID ثابت لحفظ التفاعل
+        )
+        self.role_id = role_id
+
+    async def callback(self, interaction: discord.Interaction):
+        role = interaction.guild.get_role(self.role_id)
+
+        if not role:
+            await interaction.response.send_message("❌ هذه الرتبة غير موجودة في السيرفر!", ephemeral=True)
+            return
+
+        try:
+            if role in interaction.user.roles:
+                await interaction.user.remove_roles(role)
+                await interaction.response.send_message(f"➖ تم إزالة رتبة **{role.name}** منك!", ephemeral=True)
+            else:
+                await interaction.user.add_roles(role)
+                await interaction.response.send_message(f"✅ تم إعطاؤك رتبة **{role.name}** بنجاح!", ephemeral=True)
+        except discord.Forbidden:
+            await interaction.response.send_message("❌ البوت لا يملك صلاحيات كافية لتعديل الرتبة!", ephemeral=True)
+
+class DynamicRoleView(discord.ui.View):
+    def __init__(self, role_id: int):
+        super().__init__(timeout=None) # يجعل View بدون وقت انتهاء
+        self.add_item(DynamicRoleButton(role_id))
+
+# ================= ================= =================
+# 3. أحداث البوت والمزامنة
+# ================= ================= =================
+@bot.event
+async def on_ready():
+    print(f"تم تسجيل الدخول بنجاح باسم: {bot.user}")
+    
+    # إعادة تسجيل الأزرار المستمرة لتسجيل الضغطات بعد إعادة التشغيل
+    for guild in bot.guilds:
+        for role in guild.roles:
+            bot.add_view(DynamicRoleView(role.id))
+
+    try:
+        synced = await bot.tree.sync()
+        print(f"تم مزامنة {len(synced)} أمر slash بنجاح.")
+    except Exception as e:
+        print(f"فشل في مزامنة الأوامر: {e}")
+
+# ================= ================= =================
+# 4. أمر إعطاء الرتب التقليدي (!رول @العضو)
+# ================= ================= =================
+TARGET_ROLE_ID = 1454210508684001355
+
+@bot.command(name="رول", aliases=["رتبة"])
+async def give_role(ctx, member: discord.Member = None):
+    if not ctx.author.guild_permissions.manage_roles:
+        await ctx.send("❌ لا تملك صلاحية إدارة الرتب لاستخدام هذا الأمر!")
+        return
+
+    if not member:
+        await ctx.send("❌ طريقة الاستخدام: `!رول @العضو`")
+        return
+
+    role = ctx.guild.get_role(TARGET_ROLE_ID)
+
+    if not role:
+        await ctx.send("❌ لم يتم العثور على الرتبة في السيرفر!")
+        return
+
+    try:
+        if role in member.roles:
+            await member.remove_roles(role)
+            await ctx.send(f"✅ تم إزالة الرتبة **{role.name}** من {member.mention}")
+        else:
+            await member.add_roles(role)
+            await ctx.send(f"✅ تم إعطاء الرتبة **{role.name}** لـ {member.mention}")
+    except discord.Forbidden:
+        await ctx.send("❌ لا أملك صلاحيات كافية لتعديل رتبة هذا العضو!")
+
+# ================= ================= =================
+# 5. أمر إرسال زر الرتبة (للإدارة فقط)
+# ================= ================= =================
+@bot.tree.command(name="ارسال_زر_الرتبة", description="إرسال رسالة بها زر لإعطاء رتبة معينة (للإدارة فقط)")
+@app_commands.describe(role="الرتبة التي تريد إرسال زر لها", title="عنوان الرسالة (اختياري)")
+async def send_custom_role_button(
+    interaction: discord.Interaction, 
+    role: discord.Role, 
+    title: str = "✨ استلام الرتبة"
+):
+    if not interaction.user.guild_permissions.manage_roles:
+        await interaction.response.send_message("❌ هذا الأمر مخصص للإدارة فقط!", ephemeral=True)
+        return
+
+    embed = discord.Embed(
+        title=title,
+        description=f"اضغط على الزر أدناه للحصول على رتبة {role.mention} أو إزالتها!",
+        color=discord.Color.blue()
+    )
+
+    view = DynamicRoleView(role.id)
+    bot.add_view(view) # تسجيل الـ View في البوت
+    await interaction.channel.send(embed=embed, view=view)
+    await interaction.response.send_message(f"✅ تم إرسال زر رتبة **{role.name}** بنجاح!", ephemeral=True)
+
+# ================= ================= =================
+# 6. نظام الألوان
+# ================= ================= =================
+class ColorSelect(discord.ui.Select):
+    def __init__(self, color_roles):
+        options = [
+            discord.SelectOption(
+                label=role.name, 
+                value=str(role.id), 
+                description=f"تغيير لونك إلى {role.name}",
+                emoji="🎨"
+            )
+            for role in color_roles
+        ]
+        super().__init__(placeholder="🎨 اختر اللون الذي يناسبك...", min_values=1, max_values=1, options=options)
+
+    async def callback(self, interaction: discord.Interaction):
+        role_id = int(self.values[0])
+        role = interaction.guild.get_role(role_id)
+
+        if not role:
+            await interaction.response.send_message("❌ هذه الرتبة غير موجودة!", ephemeral=True)
+            return
+
+        old_color_roles = [r for r in interaction.user.roles if r.name.startswith("Color")]
+        if old_color_roles:
+            await interaction.user.remove_roles(*old_color_roles)
+
+        await interaction.user.add_roles(role)
+        await interaction.response.send_message(f"✅ تم تغيير لونك إلى **{role.name}**!", ephemeral=True)
+
+class ColorView(discord.ui.View):
+    def __init__(self, color_roles):
+        super().__init__(timeout=None)
+        self.add_item(ColorSelect(color_roles[:25]))
+
+COLOR_HEX_CODES = {
+    1: 0xFFFFFF, 2: 0xE0E0E0, 3: 0xBDBDBD, 4: 0x9E9E9E, 5: 0x757575,
+    6: 0x616161, 7: 0x424242, 8: 0x303030, 9: 0x212121, 10: 0x121212,
+    11: 0x000000, 12: 0xFFE0B2, 13: 0xFFCC80, 14: 0xFFB74D, 15: 0xFFA726,
+    16: 0xFF9800, 17: 0xFB8C00, 18: 0xF57C00, 19: 0xEF6C00, 20: 0xE65100,
+    21: 0xBF360C, 22: 0x8D6E63, 23: 0x795548, 24: 0x6D4C41, 25: 0x5D4037
+}
+
+@bot.tree.command(name="صنع_الالوان", description="إنشاء رتب الألوان تلقائياً")
+async def create_color_roles(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True)
+    guild = interaction.guild
+    created_count = 0
+
+    for num, hex_code in COLOR_HEX_CODES.items():
+        role_name = f"Color {num}"
+        existing_role = discord.utils.get(guild.roles, name=role_name)
+        if not existing_role:
+            try:
+                await guild.create_role(name=role_name, color=discord.Color(hex_code))
+                created_count += 1
+            except Exception:
+                pass
+
+    await interaction.followup.send(f"✅ تم إنشاء {created_count} رتبة لون!", ephemeral=True)
+
+@bot.tree.command(name="اضافة_لون", description="إضافة أو تعديل لون رتبة")
+@app_commands.describe(role_name="اسم رتبة اللون", hex_code="كود الـ Hex")
+async def add_custom_color(interaction: discord.Interaction, role_name: str, hex_code: str):
+    await interaction.response.defer(ephemeral=True)
+    guild = interaction.guild
+    clean_hex = hex_code.replace("#", "")
+
+    try:
+        color_int = int(clean_hex, 16)
+    except ValueError:
+        await interaction.followup.send("❌ كود الـ Hex غير صحيح!", ephemeral=True)
+        return
+
+    existing_role = discord.utils.get(guild.roles, name=role_name)
+    if existing_role:
+        await existing_role.edit(color=discord.Color(color_int))
+        await interaction.followup.send(f"✅ تم تحديث **{role_name}**!", ephemeral=True)
+    else:
+        await guild.create_role(name=role_name, color=discord.Color(color_int))
+        await interaction.followup.send(f"✅ تم إنشاء **{role_name}** بنجاح!", ephemeral=True)
+
+@bot.tree.command(name="الوان", description="عرض قائمة الألوان")
+async def show_colors(interaction: discord.Interaction):
+    guild = interaction.guild
+    color_roles = [role for role in guild.roles if role.name.startswith("Color")]
+
+    if not color_roles:
+        await interaction.response.send_message("❌ لا توجد رتب ألوان!", ephemeral=True)
+        return
+
+    embed = discord.Embed(
+        title="🎨 قائمة ألوان السيرفر",
+        description=f"الألوان المتاحة: **{len(color_roles)}**",
+        color=discord.Color.gold()
+    )
+    await interaction.response.send_message(embed=embed, view=ColorView(color_roles))
+
+# ================= ================= =================
+# 7. أمر القرعة للمواجهات
+# ================= ================= =================
+class MatchButton(discord.ui.Button):
+    def __init__(self, match_num, p1, p2):
+        super().__init__(label=f"🏆 #{match_num}", style=discord.ButtonStyle.primary)
+        self.match_num = match_num
+        self.p1 = p1
+        self.p2 = p2
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.user.id not in [self.p1.id, self.p2.id]:
+            await interaction.response.send_message("❌ أنت لست لاعب في هذه المباراة!", ephemeral=True)
+            return
+        await interaction.response.send_message(f"✅ تم تأكيدك للمباراة #{self.match_num}!", ephemeral=True)
+
+class MatchView(discord.ui.View):
+    def __init__(self, matches):
+        super().__init__(timeout=None)
+        for num, p1, p2 in matches[:25]:
+            self.add_item(MatchButton(num, p1, p2))
+
+@bot.tree.command(name="قرعة", description="عمل قرعة مواجهات للبطولات")
+@app_commands.describe(role="رتبة المشاركين", channel="روم النشر")
+async def draw_matches(interaction: discord.Interaction, role: discord.Role, channel: discord.TextChannel):
+    await interaction.response.defer(ephemeral=True)
+    members = [m for m in role.members if not m.bot]
+
+    if len(members) < 2:
+        await interaction.followup.send("❌ عدد الأعضاء غير كافي للقرعة!", ephemeral=True)
+        return
+
+    random.shuffle(members)
+    embed = discord.Embed(title=f"🏆 جدول قرعة - {role.name}", color=discord.Color.blue())
+
+    matches_text = ""
+    matches_data = []
+    match_num = 1
+
+    for i in range(0, len(members) - 1, 2):
+        p1, p2 = members[i], members[i+1]
+        matches_data.append((match_num, p1, p2))
+        matches_text += f"⚔️ **المباراة #{match_num}**: {p1.mention} 🆚 {p2.mention}\n"
+        match_num += 1
+
+    if len(members) % 2 != 0:
+        matches_text += f"\n⭐ **متأهل تلقائياً:** {members[-1].mention}"
+
+    embed.description = matches_text
+    await channel.send(embed=embed, view=MatchView(matches_data))
+    await interaction.followup.send(f"✅ تم إرسال القرعة في {channel.mention}!", ephemeral=True)
+
+# ================= ================= =================
+# 8. لعبة التكتيك والذكاء (شبكة 5x4)
+# ================= ================= =================
+BOARD_ROWS = 5
+BOARD_COLS = 4
+
+class TacticalBoardView(discord.ui.View):
+    def __init__(self, player1: discord.Member, player2: discord.Member):
+        super().__init__(timeout=300)
+        self.p1 = player1
+        self.p2 = player2
+        self.turn = player1
+        self.symbols = {player1.id: "🔴", player2.id: "🔵"}
+        self.placed_count = {player1.id: 0, player2.id: 0}
+        self.board = [["⬛" for _ in range(BOARD_COLS)] for _ in range(BOARD_ROWS)]
+        self.selected_pos = None
+
+        for r in range(BOARD_ROWS):
+            for c in range(BOARD_COLS):
+                button = discord.ui.Button(
+                    label="\u200b", 
+                    style=discord.ButtonStyle.secondary, 
+                    row=r, 
+                    custom_id=f"btn_{r}_{c}"
+                )
+                button.callback = self.make_callback(r, c)
+                self.add_item(button)
+
+    def make_callback(self, r, c):
+        async def callback(interaction: discord.Interaction):
+            await self.handle_click(interaction, r, c)
+        return callback
+
+    async def handle_click(self, interaction: discord.Interaction, r: int, c: int):
+        if interaction.user.id != self.turn.id:
+            await interaction.response.send_message("❌ ليس دورك الآن!", ephemeral=True)
+            return
+
+        user_id = interaction.user.id
+        symbol = self.symbols[user_id]
+
+        if self.placed_count[user_id] < 4:
+            if self.board[r][c] != "⬛":
+                await interaction.response.send_message("❌ هذا المربع مشغول!", ephemeral=True)
+                return
+
+            self.board[r][c] = symbol
+            self.placed_count[user_id] += 1
+
+            if self.check_win(symbol):
+                self.disable_all()
+                await interaction.response.edit_message(content=f"🎉 **مبروك! الفائز بالذكاء هو {self.turn.mention}!** 🏆", view=self)
+                return
+
+            self.switch_turn()
+            await self.update_view(interaction)
+        else:
+            if self.selected_pos is None:
+                if self.board[r][c] != symbol:
+                    await interaction.response.send_message("❌ اختر قطعة من قطعك لنقلها!", ephemeral=True)
+                    return
+                self.selected_pos = (r, c)
+                await interaction.response.send_message("🎯 تم تحديد القطعة! اضغط على أي مربع فارغ لنقلها إليه.", ephemeral=True)
+            else:
+                sr, sc = self.selected_pos
+                if (r, c) == (sr, sc):
+                    self.selected_pos = None
+                    await interaction.response.send_message("🔄 تم إلغاء تحديد القطعة.", ephemeral=True)
+                    return
+
+                if self.board[r][c] != "⬛":
+                    await interaction.response.send_message("❌ يجب نقل القطعة إلى مربع فارغ!", ephemeral=True)
+                    return
+
+                self.board[sr][sc] = "⬛"
+                self.board[r][c] = symbol
+                self.selected_pos = None
+
+                if self.check_win(symbol):
+                    self.disable_all()
+                    await interaction.response.edit_message(content=f"🎉 **مبروك! الفائز بالذكاء هو {self.turn.mention}!** 🏆", view=self)
+                    return
+
+                self.switch_turn()
+                await self.update_view(interaction)
+
+    def switch_turn(self):
+        self.turn = self.p2 if self.turn == self.p1 else self.p1
+
+    def disable_all(self):
+        for child in self.children:
+            child.disabled = True
+
+    async def update_view(self, interaction: discord.Interaction):
+        for child in self.children:
+            r = child.row
+            c = int(child.custom_id.split("_")[2])
+            cell = self.board[r][c]
+            if cell == "⬛":
+                child.label = "\u200b"
+                child.emoji = None
+                child.style = discord.ButtonStyle.secondary
+            else:
+                child.label = ""
+                child.emoji = cell
+                child.style = discord.ButtonStyle.primary if cell == "🔴" else discord.ButtonStyle.success
+
+        p1_placed = self.placed_count[self.p1.id]
+        p2_placed = self.placed_count[self.p2.id]
+        
+        status_text = (
+            f"⚔️ **مباراة التكتيك والذكاء (5x4)**\n"
+            f"🔴 {self.p1.mention} (القطع: {p1_placed}/4)\n"
+            f"🔵 {self.p2.mention} (القطع: {p2_placed}/4)\n\n"
+            f"👉 **الدور الحالي عند:** {self.turn.mention}\n"
+            f"💡 *ضع 4 قطع أولاً، ثم حرك أي قطعة لمربع فارغ لتكون 3 قطع متتالية!*"
+        )
+        await interaction.response.edit_message(content=status_text, view=self)
+
+    def check_win(self, s):
+        for r in range(BOARD_ROWS):
+            for c in range(BOARD_COLS - 2):
+                if self.board[r][c] == s and self.board[r][c+1] == s and self.board[r][c+2] == s:
+                    return True
+
+        for r in range(BOARD_ROWS - 2):
+            for c in range(BOARD_COLS):
+                if self.board[r][c] == s and self.board[r+1][c] == s and self.board[r+2][c] == s:
+                    return True
+
+        for r in range(BOARD_ROWS - 2):
+            for c in range(BOARD_COLS - 2):
+                if self.board[r][c] == s and self.board[r+1][c+1] == s and self.board[r+2][c+2] == s:
+                    return True
+
+        for r in range(BOARD_ROWS - 2):
+            for c in range(2, BOARD_COLS):
+                if self.board[r][c] == s and self.board[r+1][c-1] == s and self.board[r+2][c-2] == s:
+                    return True
+
+        return False
+
+@bot.tree.command(name="تحدي", description="بدء لعبة التكتيك والذكاء 4 قطع (شبكة 5x4)")
+@app_commands.describe(opponent="اختر الخصم الذي تريد اللعب ضده")
+async def challenge(interaction: discord.Interaction, opponent: discord.Member):
+    await interaction.response.defer()
+
+    if opponent.bot or opponent.id == interaction.user.id:
+        await interaction.followup.send("❌ اختر خصماً صحيحاً (ليس بوت ولا نفسك)!", ephemeral=True)
+        return
+
+    view = TacticalBoardView(interaction.user, opponent)
+    start_msg = (
+        f"⚔️ **بدأت مباراة التكتيك والذكاء بين {interaction.user.mention} 🔴 و {opponent.mention} 🔵!**\n"
+        f"الشبكة: **5x4** | الهدف: **تكوين 3 قطع متتالية**\n\n"
+        f"👉 **الدور الأول عند:** {interaction.user.mention}"
+    )
+    await interaction.followup.send(start_msg, view=view)
